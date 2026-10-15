@@ -1,45 +1,35 @@
-# Contributing to Skim
+# Contributing to Skim-Android
 
-Thanks for considering a contribution! Skim is a minimalist project on purpose — the best patches are small, focused, and keep the app fast.
+Hi, thanks for wanting to help!
 
-## Development setup
+This repo is a personal experiment, and `main` is protected: nobody can push
+to it directly â€” not even the owner. Everything lands through a reviewed
+pull request. That keeps malware and junk out.
 
-Prerequisites (Windows):
+## How it works
 
-- [Node.js 20+](https://nodejs.org)
-- [Rust (stable, MSVC)](https://rustup.rs)
-- Visual Studio Build Tools with the **Desktop development with C++** workload
+1. **Open an issue first** describing what you'd like to add or fix. Big
+   changes without a prior issue will be closed â€” this is how you "ask for
+   access": propose, discuss, then code.
+2. **Fork** the repo, create a branch, do the work there.
+3. **Open a pull request** against `main`. Small, focused PRs get reviewed
+   fastest. Describe what you changed and how you tested it (device or
+   emulator, Android version).
+4. Wait for review. Every PR is read and tested by Vesdal before merge.
 
-```powershell
-npm install
-npm run tauri dev    # run the app with hot reload
-```
+## Security rules (non-negotiable)
 
-Before opening a PR, make sure the checks CI runs are green locally:
-
-```powershell
-npm run check                                   # svelte-check + tsc
-cargo fmt --check   --manifest-path src-tauri/Cargo.toml
-cargo clippy --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings
-cargo test          --manifest-path src-tauri/Cargo.toml
-```
-
-## Project shape
-
-- `src/` — Svelte 5 frontend. No UI kits; design tokens live in `src/styles/tokens.css`. The violet accent (`--accent`) is reserved **exclusively** for AI features.
-- `src-tauri/src/` — Rust core: `mail/` (IMAP/SMTP/sync/sanitize), `db/` (SQLite + FTS5), `ai/` (Anthropic client), `commands/` (the IPC surface).
-- Every mutation goes through the offline op queue (`pending_ops`); the UI updates optimistically and the server catches up.
-
-## Translations
-
-Locale files live in `src/lib/i18n/locales/*.json`. English (`en.json`) is the source of truth; other languages were written by the maintainers and welcome native-speaker review. Plural keys use the `key_one` / `key_few` / `key_many` / `key_other` convention selected via `Intl.PluralRules`.
-
-To fix or improve a translation, edit the JSON and open a PR — no code changes needed.
-
-## Scope
-
-Skim intentionally leaves things out: multi-account UI, PGP, calendars, contacts, filters/rules, snooze. If a feature idea grows the surface area, open an issue to discuss before writing code. Bug fixes, performance work, and polish are always welcome.
+- No binaries, executables, or prebuilt blobs in PRs. Build outputs ship only
+  through GitHub Releases made by the owner.
+- No minified or obfuscated code â€” everything must be human-readable.
+- No secrets, API keys, tokens, or keystores. Ever.
+- No new network endpoints, permissions, or dependencies without explaining
+  why in the PR. Keep new dependencies minimal and pinned.
+- No changes to signing, OAuth client IDs, or update endpoints without prior
+  discussion in an issue.
 
 ## License
 
-By contributing you agree that your contributions are licensed under the [MIT License](LICENSE).
+MIT, same as upstream Skim. By contributing you agree your work lands under
+the MIT license. Keep the Thunderbird OAuth attribution intact. The original
+app is by [nikserg](https://github.com/nikserg/skim).
