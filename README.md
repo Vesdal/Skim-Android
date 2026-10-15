@@ -12,7 +12,7 @@ Hi
 client - but desktop-only. I wanted it on my phone (Galaxy S25 Ultra), so I
 had it adapted to Android: full-screen edge-to-edge UI, touch layouts, system
 back button, pull-to-refresh, long-press multi-select, native notification
-permission, and the same Thunderbird OAuth login for Gmail and Outlook so institutional account's won't piss u off.
+permission, and the same Thunderbird OAuth login for Gmail and Outlook so institutional accounts won't piss u off.
 
 This is my 2nd experiment, built with AI; so again, have mercy lol.
 
