@@ -9,15 +9,14 @@
 Hi
 
 [Skim](https://github.com/nikserg/skim) is a fast, minimalist, AI-native email
-client — but desktop-only. I wanted it on my phone (Galaxy S25 Ultra), so I
+client - but desktop-only. I wanted it on my phone (Galaxy S25 Ultra), so I
 had it adapted to Android: full-screen edge-to-edge UI, touch layouts, system
 back button, pull-to-refresh, long-press multi-select, native notification
-permission, and the same Thunderbird OAuth login for Gmail and Outlook.
+permission, and the same Thunderbird OAuth login for Gmail and Outlook so institutional account's won't piss u off.
 
-**Still rough around the edges.** This is my little experiment, built with AI
-help — expect bugs, missing polish, and updates along the way. Have mercy lol.
+This is my 2nd experiment, built with AI; so again, have mercy lol.
 
-## Money bit
+## Money bit (copy and paste from my other project, I'm sry but I need some rest fr)
 
 Built with AI assistance because I have neither coding skills nor time to learn
 (uni is graping my ahh). Charging like I wrote all this myself wouldn't feel
