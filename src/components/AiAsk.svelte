@@ -236,6 +236,15 @@
     max-height: 38vh;
     flex-shrink: 0;
   }
+  /* Narrow screens (and the keyboard-open shrink that comes with them):
+     match the reading pane's gutters and leave the message visible behind
+     the dock instead of squeezing it out. */
+  @media (max-width: 760px) {
+    .ai-dock {
+      padding: 8px 16px 12px;
+      max-height: 34vh;
+    }
+  }
   /* Filling the app window, or a window of its own: take all the room there is. */
   .ai-dock.fill {
     border-top: none;

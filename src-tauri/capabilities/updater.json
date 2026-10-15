@@ -3,5 +3,6 @@
   "identifier": "updater",
   "description": "Self-update. The banner that drives it lives in the sidebar, so only the main window may check, download or install a release.",
   "windows": ["main"],
+  "platforms": ["windows", "linux", "macOS"],
   "permissions": ["updater:default"]
 }

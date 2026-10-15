@@ -146,7 +146,7 @@
               {#each cited as c (c.index)}
                 <button class="chip" onclick={() => oncitation(c)}>
                   <span class="index">{c.index}</span>
-                  {c.subject || c.from}
+                  <span class="subject">{c.subject || c.from}</span>
                 </button>
               {/each}
             </div>
@@ -169,7 +169,7 @@
                     {#each turn.citations as c (c.index)}
                       <button class="chip" onclick={() => oncitation(c)}>
                         <span class="index">{c.index}</span>
-                        {c.subject || c.from}
+                        <span class="subject">{c.subject || c.from}</span>
                       </button>
                     {/each}
                   </div>
@@ -435,6 +435,15 @@
     font-size: 10.5px;
     font-weight: 700;
     flex-shrink: 0;
+  }
+  /* Same as the palette chips: the subject must be a real flex item to
+     ellipsize instead of running past the chip's edge. */
+  .chip .subject {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* ---- follow-up conversation ------------------------------------------- */

@@ -1,11 +1,13 @@
-//! Secrets live in the Windows Credential Manager, never in the database.
+//! Secrets live in the platform credential store, never in the database.
 //!
-//! One credential entry only holds so much text, and a Microsoft refresh token
-//! does not fit in one. A secret that is too long is split across numbered
-//! entries; callers never see the difference.
+//! Windows: Credential Manager. Android: files under the app's private data
+//! dir (sandboxed per-app by the OS). Either way one entry only holds so much
+//! text, and a Microsoft refresh token does not fit in one. A secret that is
+//! too long is split across numbered entries; callers never see the difference.
 
 use crate::error::{Result, SkimError};
 
+#[cfg(windows)]
 const SERVICE: &str = "Skim";
 
 /// `ERROR_NOT_ENOUGH_MEMORY`. Credential Manager answers a write with this when
@@ -34,6 +36,7 @@ const _: () = assert!(CHUNK_UNITS >= 2 && CHUNK_UNITS <= WINDOWS_LIMIT_UNITS);
 const MARKER: &str = "\u{1}skim-chunks-v1:";
 
 /// The Win32 code behind a keyring failure, when there is one.
+#[cfg(windows)]
 fn win32_code(e: &keyring::Error) -> Option<u32> {
     match e {
         keyring::Error::PlatformFailure(inner) | keyring::Error::NoStorageAccess(inner) => {
@@ -43,8 +46,9 @@ fn win32_code(e: &keyring::Error) -> Option<u32> {
     }
 }
 
-/// Give the UI a stable code to explain the failure by, and keep the raw Windows
-/// text as the detail — it is what a bug report needs.
+/// Give the UI a stable code to explain the failure by, and keep the raw
+/// platform text as the detail — it is what a bug report needs.
+#[cfg(windows)]
 fn store_err(e: keyring::Error) -> SkimError {
     let code = if win32_code(&e) == Some(ERROR_NOT_ENOUGH_MEMORY) {
         "secrets_full"
@@ -57,6 +61,14 @@ fn store_err(e: keyring::Error) -> SkimError {
     SkimError::other(code, format!("credential store: {e}"))
 }
 
+/// Android file-store failures carry no platform code to match on.
+#[cfg(target_os = "android")]
+fn store_err(e: std::io::Error) -> SkimError {
+    tracing::error!(error = %e, code = "secrets", "credential store failed");
+    SkimError::other("secrets", format!("credential store: {e}"))
+}
+
+#[cfg(windows)]
 fn entry(account: &str) -> Result<keyring::Entry> {
     keyring::Entry::new(SERVICE, account).map_err(store_err)
 }
@@ -72,6 +84,7 @@ trait Vault {
 
 struct Keyring;
 
+#[cfg(windows)]
 impl Vault for Keyring {
     fn set(&self, key: &str, value: &str) -> Result<()> {
         entry(key)?.set_password(value).map_err(store_err)
@@ -91,6 +104,79 @@ impl Vault for Keyring {
             Err(e) => Err(store_err(e)),
         }
     }
+}
+
+/// Android file vault: one file per entry under `<app-data>/secrets`, a dir
+/// only this app's UID can read. `init` runs once from `setup()` before any
+/// secret is touched; without it every call reports the store unavailable
+/// instead of panicking.
+#[cfg(target_os = "android")]
+mod file_vault {
+    use super::{Result, SkimError};
+    use std::sync::OnceLock;
+
+    static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+    pub fn init(data_dir: &std::path::Path) {
+        let _ = DIR.set(data_dir.join("secrets"));
+    }
+
+    fn dir() -> Result<&'static std::path::Path> {
+        DIR.get().map(|p| p.as_path()).ok_or_else(|| {
+            SkimError::other("secrets_unavailable", "credential store: not initialised")
+        })
+    }
+
+    /// Entry keys are `mail:<uuid>` (+ `#<gen><n>` chunks): no separators or
+    /// traversal in them, but encode defensively — a hand-edited vault must
+    /// not escape the dir.
+    fn path_for(dir: &std::path::Path, key: &str) -> std::path::PathBuf {
+        let safe: String = key
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':' || c == '#' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        dir.join(safe)
+    }
+
+    pub struct FileVault;
+
+    impl super::Vault for FileVault {
+        fn set(&self, key: &str, value: &str) -> Result<()> {
+            let dir = dir()?;
+            std::fs::create_dir_all(dir).map_err(super::store_err)?;
+            std::fs::write(path_for(dir, key), value).map_err(super::store_err)
+        }
+
+        fn get(&self, key: &str) -> Result<Option<String>> {
+            let dir = dir()?;
+            match std::fs::read_to_string(path_for(dir, key)) {
+                Ok(s) => Ok(Some(s)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(super::store_err(e)),
+            }
+        }
+
+        fn delete(&self, key: &str) -> Result<()> {
+            let dir = dir()?;
+            match std::fs::remove_file(path_for(dir, key)) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(super::store_err(e)),
+            }
+        }
+    }
+}
+
+/// Root of the platform credential store, set once from `setup()` on Android.
+#[cfg(target_os = "android")]
+pub fn init(data_dir: &std::path::Path) {
+    file_vault::init(data_dir);
 }
 
 /// Which set of chunk entries is live. A write always fills the *other* one, so
@@ -303,15 +389,24 @@ fn delete_in(vault: &dyn Vault, key: &str) -> Result<()> {
 }
 
 pub fn set(account: &str, secret: &str) -> Result<()> {
-    set_in(&Keyring, account, secret)
+    #[cfg(target_os = "android")]
+    return set_in(&file_vault::FileVault, account, secret);
+    #[cfg(not(target_os = "android"))]
+    return set_in(&Keyring, account, secret);
 }
 
 pub fn get(account: &str) -> Result<Option<String>> {
-    get_in(&Keyring, account)
+    #[cfg(target_os = "android")]
+    return get_in(&file_vault::FileVault, account);
+    #[cfg(not(target_os = "android"))]
+    return get_in(&Keyring, account);
 }
 
 pub fn delete(account: &str) -> Result<()> {
-    delete_in(&Keyring, account)
+    #[cfg(target_os = "android")]
+    return delete_in(&file_vault::FileVault, account);
+    #[cfg(not(target_os = "android"))]
+    return delete_in(&Keyring, account);
 }
 
 /// Key under which the mail credential for an account is stored. Holds the

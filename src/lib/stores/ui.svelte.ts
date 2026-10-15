@@ -35,6 +35,8 @@ const state = $state({
   shortcutsOpen: false,
   /** Left menu collapsed to an icon-only rail. */
   sidebarCollapsed: false,
+  /** Mobile drawer: the sidebar slides over the list; desktop ignores this. */
+  drawerOpen: false,
   /** Open folder picker, and the thread it will file. */
   movePicker: null as MoveRequest | null,
   /** Open rename/delete dialog, and the folder it acts on. */
@@ -61,7 +63,18 @@ function parseTheme(raw: string | undefined): { temperature: Temperature; lightn
     case "system":
       return { temperature: "cold", lightness: media.matches ? "dark" : "light" };
     default:
-      return { temperature: "warm", lightness: "light" };
+      // No stored theme (fresh install): follow the OS lightness, keeping the
+      // warm flagship look. Stored values always carry both axes, so this
+      // branch only runs until the user picks a theme in Settings.
+      return {
+        temperature: "warm",
+        lightness:
+          typeof window !== "undefined" &&
+          typeof window.matchMedia === "function" &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches
+            ? "dark"
+            : "light",
+      };
   }
 }
 
@@ -150,6 +163,15 @@ export const ui = {
   toggleSidebar() {
     state.sidebarCollapsed = !state.sidebarCollapsed;
     void api.setSetting("sidebar_collapsed", state.sidebarCollapsed ? "on" : "off").catch(() => {});
+  },
+  get drawerOpen() {
+    return state.drawerOpen;
+  },
+  toggleDrawer() {
+    state.drawerOpen = !state.drawerOpen;
+  },
+  closeDrawer() {
+    state.drawerOpen = false;
   },
   get movePicker() {
     return state.movePicker;

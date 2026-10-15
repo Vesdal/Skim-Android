@@ -10,7 +10,33 @@ html,
 body,
 #app {
   height: 100%;
+  height: 100dvh;
   overflow: hidden;
+}
+
+/* Fixed fullscreen shell: scroll inside panes, never pinch-zoom or pan the
+   page itself around. */
+html,
+body {
+  touch-action: pan-x pan-y;
+  overscroll-behavior: none;
+}
+
+/* Edge-to-edge (S25 Ultra e simili): la WebView si estende sotto status bar,
+   punch-hole e gesture bar. Le safe-area vengono consumate dal contenitore
+   .app, non dal body, per non lasciare bande nere. */
+body {
+  background: var(--bg);
+}
+
+/* Scroll fluido su touch e niente tap-highlight grigio. */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+.scroll,
+.rows,
+.rowsEl {
+  -webkit-overflow-scrolling: touch;
 }
 
 body {
@@ -173,4 +199,17 @@ a {
 }
 :root[data-theme="warm-dark"] .md-body strong.hl3 {
   background: linear-gradient(transparent 59%, var(--hl-3) 59%);
+}
+
+/* Touch: campi a 16px per evitare lo zoom automatico al focus su Android, e
+   kbd mai mostrati (non esiste una tastiera fisica). */
+@media (pointer: coarse) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+  kbd {
+    display: none;
+  }
 }

@@ -7,8 +7,11 @@ use crate::db::{queries, Db};
 use crate::state::AppState;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
+#[cfg(windows)]
 use windows::core::HSTRING;
+#[cfg(windows)]
 use windows::Data::Xml::Dom::XmlDocument;
+#[cfg(windows)]
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
 
 const AUMID: &str = "com.skim.app";
@@ -28,13 +31,13 @@ pub fn toast_icon_path() -> Option<std::path::PathBuf> {
 
 /// Register the AppUserModelID so toasts carry Skim's name and icon.
 ///
-/// Note: the registry entry alone is not enough on current Windows 11
-/// builds — toasts actually display because the installer's Start Menu
-/// shortcut carries `System.AppUserModel.ID`. This entry supplements it
-/// with the display name and icon.
+/// Windows only: registry + Start Menu shortcut integration. Elsewhere there
+/// is nothing to register (Android toasts go through the notification plugin).
 pub fn register_aumid() {
-    use winreg::enums::{HKEY_CURRENT_USER, REG_EXPAND_SZ};
-    use winreg::{RegKey, RegValue};
+    #[cfg(windows)]
+    {
+        use winreg::enums::{HKEY_CURRENT_USER, REG_EXPAND_SZ};
+        use winreg::{RegKey, RegValue};
 
     fn expand_sz(value: &str) -> RegValue {
         let bytes: Vec<u8> = value
@@ -61,16 +64,16 @@ pub fn register_aumid() {
         let _ = key.set_raw_value("DisplayName", &expand_sz("Skim"));
         let _ = key.set_raw_value("IconUri", &expand_sz(&icon_path.to_string_lossy()));
     }
+    }
 }
 
-/// Register the `skim:` URL scheme so protocol-activated toasts (and any
-/// `skim://…` link) launch the app with the URI as its argument. Toast body
-/// and button clicks use `activationType="protocol"`, which the shell routes
-/// here — no COM activator or in-process message pump required (the reason
-/// the previous in-process `on_activated` callback never fired).
+/// Register the `skim:` URL scheme (Windows registry) so protocol-activated
+/// toasts launch the app with the URI as its argument. No-op elsewhere.
 pub fn register_url_scheme() {
-    use winreg::enums::HKEY_CURRENT_USER;
-    use winreg::RegKey;
+    #[cfg(windows)]
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
 
     let Ok(exe) = std::env::current_exe() else {
         return;
@@ -86,6 +89,7 @@ pub fn register_url_scheme() {
         hkcu.create_subkey(format!(r"Software\Classes\{URL_SCHEME}\shell\open\command"))
     {
         let _ = key.set_value("", &format!("\"{exe}\" \"%1\""));
+    }
     }
 }
 
@@ -219,16 +223,18 @@ pub async fn notify_new_mail(app: &AppHandle, db: &Db, message_pks: &[i64]) {
     // so no image goes inside the toast body.
     // The third <text> renders as the toast's attribution line — used to name
     // the receiving mailbox, but only when more than one account is connected.
-    let attribution = account_email
-        .map(|email| {
-            format!(
-                "\n            <text placement=\"attribution\">{}</text>",
-                xml_escape(&email)
-            )
-        })
-        .unwrap_or_default();
-    let xml = format!(
-        r#"<toast activationType="protocol" launch="{launch}">
+    #[cfg(windows)]
+    {
+        let attribution = account_email
+            .map(|email| {
+                format!(
+                    "\n            <text placement=\"attribution\">{}</text>",
+                    xml_escape(&email)
+                )
+            })
+            .unwrap_or_default();
+        let xml = format!(
+            r#"<toast activationType="protocol" launch="{launch}">
     <visual>
         <binding template="ToastGeneric">
             <text>{title}</text>
@@ -239,23 +245,48 @@ pub async fn notify_new_mail(app: &AppHandle, db: &Db, message_pks: &[i64]) {
         <action content="{mark}" activationType="protocol" arguments="{read}"/>
     </actions>
 </toast>"#,
-        launch = xml_escape(&open_uri),
-        title = xml_escape(&title),
-        body = xml_escape(&body),
-        mark = xml_escape(mark_read),
-        read = xml_escape(&read_uri),
-    );
+            launch = xml_escape(&open_uri),
+            title = xml_escape(&title),
+            body = xml_escape(&body),
+            mark = xml_escape(mark_read),
+            read = xml_escape(&read_uri),
+        );
 
-    // WinRT toast objects are !Send — build and show on a blocking thread.
-    let _ = tokio::task::spawn_blocking(move || {
-        if let Err(e) = show_toast_xml(&xml) {
-            tracing::warn!(error = %e, "failed to show toast");
+        // WinRT toast objects are !Send — build and show on a blocking thread.
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Err(e) = show_toast_xml(&xml) {
+                tracing::warn!(error = %e, "failed to show toast");
+            }
+        })
+        .await;
+    }
+
+    // Android: plain notification through the notification plugin. A tap
+    // brings the app forward; per-message deep links ride on `skim://…`
+    // intents, which Android does not deliver — the pending-open stash stays
+    // empty and the user lands on the inbox.
+    #[cfg(target_os = "android")]
+    {
+        let _ = (open_uri, read_uri, mark_read);
+        let mut full_body = body;
+        if let Some(email) = account_email {
+            full_body.push_str(&format!(" — {email}"));
         }
-    })
-    .await;
+        use tauri_plugin_notification::NotificationExt;
+        if let Err(e) = app
+            .notification()
+            .builder()
+            .title(title)
+            .body(full_body)
+            .show()
+        {
+            tracing::warn!(error = %e, "failed to show notification");
+        }
+    }
 }
 
 /// Build and display a toast from a raw XML document under Skim's AUMID.
+#[cfg(windows)]
 fn show_toast_xml(xml: &str) -> windows::core::Result<()> {
     let doc = XmlDocument::new()?;
     doc.LoadXml(&HSTRING::from(xml))?;
@@ -286,6 +317,7 @@ pub fn handle_skim_uri(app: &AppHandle, uri: &str, frontend_ready: bool) {
             if frontend_ready {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
+                    #[cfg(desktop)]
                     let _ = window.unminimize();
                     let _ = window.set_focus();
                 }

@@ -319,6 +319,25 @@
     padding-top: 12vh;
     z-index: 100;
   }
+  /* Narrow screens: bottom sheet pinned above the keyboard. The panel keeps
+     its own height (growing to a cap of the visible area) instead of jumping
+     around as the keyboard opens and closes. */
+  @media (max-width: 760px) {
+    .overlay {
+      padding-top: 0;
+      align-items: flex-end;
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    .panel {
+      width: 100%;
+      max-width: 100%;
+      max-height: 88dvh;
+      border-radius: var(--radius-l) var(--radius-l) 0 0;
+      border-left: none;
+      border-right: none;
+      border-bottom: none;
+    }
+  }
   .panel {
     position: relative;
     width: 620px;

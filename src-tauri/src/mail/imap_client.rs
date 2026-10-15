@@ -39,11 +39,28 @@ impl async_imap::Authenticator for Xoauth2<'_> {
 }
 
 fn tls_connector() -> Result<TlsConnector> {
-    use rustls_platform_verifier::BuilderVerifierExt;
-    let config = rustls::ClientConfig::builder()
-        .with_platform_verifier()
-        .with_no_client_auth();
-    Ok(TlsConnector::from(Arc::new(config)))
+    #[cfg(target_os = "android")]
+    {
+        // Android uses bundled Mozilla roots instead of the platform store:
+        // reaching the platform verifier needs JVM init gymnastics whose
+        // failure modes (including a hard panic) all kill the app, while the
+        // bundled roots — the same ones HTTPS already uses in this app — just
+        // work. A corporate MITM proxy surfaces as an ordinary TLS error.
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        return Ok(TlsConnector::from(Arc::new(config)));
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        use rustls_platform_verifier::BuilderVerifierExt;
+        let config = rustls::ClientConfig::builder()
+            .with_platform_verifier()
+            .with_no_client_auth();
+        Ok(TlsConnector::from(Arc::new(config)))
+    }
 }
 
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);

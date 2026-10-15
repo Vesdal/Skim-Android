@@ -707,7 +707,7 @@ pub async fn open_compose_window(app: AppHandle, draft_id: i64) -> Result<()> {
         let _ = existing.set_focus();
         return Ok(());
     }
-    tauri::WebviewWindowBuilder::new(
+    let builder = tauri::WebviewWindowBuilder::new(
         &app,
         label,
         tauri::WebviewUrl::App(format!("index.html#/compose/{draft_id}").into()),
@@ -715,14 +715,17 @@ pub async fn open_compose_window(app: AppHandle, draft_id: i64) -> Result<()> {
     .title("Skim")
     .inner_size(720.0, 680.0)
     .min_inner_size(520.0, 420.0)
-    .decorations(false)
     // Let HTML5 dragover/drop reach the webview (for file attachments) instead
     // of Tauri intercepting native file drops. Window-move via
     // data-tauri-drag-region is unaffected.
-    .disable_drag_drop_handler()
-    .center()
-    .build()
-    .map_err(|e| SkimError::other("window", e.to_string()))?;
+    .disable_drag_drop_handler();
+    // Frameless centered windows only exist on desktop; mobile shows the
+    // view fullscreen.
+    #[cfg(desktop)]
+    let builder = builder.decorations(false).center();
+    builder
+        .build()
+        .map_err(|e| SkimError::other("window", e.to_string()))?;
     Ok(())
 }
 

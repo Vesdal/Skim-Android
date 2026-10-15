@@ -78,11 +78,19 @@ pub async fn set_setting(state: State<'_, AppState>, key: String, value: String)
 /// The Windows Credential Manager can refuse a write — most often because its
 /// vault is full of other apps' entries. Take the user straight to the pane
 /// where they can clear it, rather than describing a path through Control Panel.
+/// Android keeps secrets in the app's private dir instead: nothing to open.
 #[tauri::command]
 pub fn open_credential_manager() -> Result<()> {
+    #[cfg(windows)]
     std::process::Command::new("control.exe")
         .args(["/name", "Microsoft.CredentialManager"])
         .spawn()?;
+    #[cfg(not(windows))]
+    return Err(SkimError::other(
+        "settings",
+        "no credential manager on this platform",
+    ));
+    #[cfg(windows)]
     Ok(())
 }
 

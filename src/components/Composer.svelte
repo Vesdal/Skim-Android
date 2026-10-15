@@ -3,6 +3,8 @@
   // window chrome around the shared ComposeForm; every action that ends the
   // draft (send/discard/close) closes the window.
   import ComposeForm from "./ComposeForm.svelte";
+  import Settings from "./settings/Settings.svelte";
+  import { ui } from "../lib/stores/ui.svelte";
 
   let { draftId }: { draftId: number } = $props();
 
@@ -13,3 +15,7 @@
 </script>
 
 <ComposeForm {draftId} chrome onSent={closeWindow} onClose={closeWindow} onDiscarded={closeWindow} />
+
+{#if ui.settingsOpen}
+  <Settings onclose={() => ui.closeSettings()} />
+{/if}

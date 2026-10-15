@@ -1,3 +1,9 @@
+# Android signing material — private key + password. Never commit: losing
+# these only means future updates need a reinstall, leaking them is worse.
+build-android/*.keystore
+build-android/*keystore.txt
+build-android/*.idsig
+
 # Node
 node_modules/
 dist/

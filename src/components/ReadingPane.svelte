@@ -497,6 +497,18 @@
     {/if}
   {:else}
     <header class="toolbar">
+      <button
+        class="tool back"
+        onclick={() => {
+          mail.selectedThreadId = null;
+          mail.selectedMessageId = null;
+          ui.closeRecap();
+        }}
+        aria-label={t("nav.back")}
+        title={t("nav.back")}
+      >
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 2.5L4.5 8l5.5 5.5" /></svg>
+      </button>
       <div class="spacer"></div>
       <button class="tool" onclick={archive} title={t("reading.archive")}>
         <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 3h12v3H2V3zm1 3v7h10V6M6.5 9h3" /></svg>
@@ -936,6 +948,21 @@
   .tool.starred {
     color: var(--text);
   }
+  /* Mobile back chevron — desktop navigates with the persistent list. */
+  .tool.back {
+    display: none;
+  }
+  @media (max-width: 760px) {
+    .tool.back {
+      display: flex;
+      min-width: 40px;
+      min-height: 40px;
+      justify-content: center;
+    }
+    .toolbar kbd {
+      display: none;
+    }
+  }
   kbd {
     font-family: var(--font-mono);
     font-size: 10px;
@@ -1276,5 +1303,33 @@
 
   .sep {
     color: var(--text-faint);
+  }
+
+  /* Su schermi stretti il padding laterale da desktop spreca spazio. */
+  @media (max-width: 760px) {
+    .scroll {
+      padding: 8px 16px 28px;
+    }
+    .toolbar {
+      padding: 8px 12px 0;
+    }
+    .actions {
+      padding: 10px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+      overflow-x: auto;
+    }
+  }
+
+  /* Touch: target da 44px, niente hint da tastiera, niente hover-only. */
+  @media (pointer: coarse) {
+    .tool {
+      min-width: 44px;
+      min-height: 44px;
+      justify-content: center;
+    }
+    .toolbar kbd,
+    .actions kbd,
+    .chips kbd {
+      display: none;
+    }
   }
 </style>

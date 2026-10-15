@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getVersion } from "@tauri-apps/api/app";
+  import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { aiApi, api, credentialStoreError, errorMessage, type AiProvider } from "../../lib/api";
   import { getLocale, LOCALES, setLocale, t, type Locale } from "../../lib/i18n/index.svelte";
@@ -10,13 +11,20 @@
 
   let { oncomplete }: { oncomplete: (account: Account) => void } = $props();
 
-  let step: "welcome" | "connect" | "ai" = $state("welcome");
-  let locale: Locale = $state(getLocale());
+  let step: "welcome" | "connect" | "ai" = $state("welcome");  let locale: Locale = $state(getLocale());
   let connectedAccount = $state<Account | null>(null);
-  let appVersion = $state("");
-  void getVersion()
+  let appVersion = $state("");  void getVersion()
     .then((v) => (appVersion = v))
     .catch(() => {});
+
+  // On Android the "Windows" product strings are wrong — swap the OS token.
+  // "Android" needs no translation, so no locale-file churn.
+  const onAndroid =
+    typeof navigator !== "undefined" && navigator.userAgent.includes("Android");
+  function osText(key: string): string {
+    const s = t(key);
+    return onAndroid ? s.replaceAll("Windows", "Android") : s;
+  }
 
   // AI step
   let aiKey = $state("");
@@ -81,7 +89,18 @@
   }
 
   function finish() {
-    if (connectedAccount) oncomplete(connectedAccount);
+    if (connectedAccount) {
+      // Android asks for notification permission once, natively — afterwards
+      // the OS remembers and the in-app toggle is gone for good.
+      if (onAndroid) {
+        void isPermissionGranted()
+          .then((granted) => {
+            if (!granted) void requestPermission().catch(() => {});
+          })
+          .catch(() => {});
+      }
+      oncomplete(connectedAccount);
+    }
   }
 
   async function chooseLocale(code: Locale) {
@@ -112,7 +131,7 @@
         {t("onb.tagline_1")}<br />
         <em>{t("onb.tagline_2")}</em>
       </h1>
-      <p class="subtitle">{t("onb.subtitle")}</p>
+      <p class="subtitle">{osText("onb.subtitle")}</p>
       <button class="primary" onclick={toConnect}>{t("onb.get_started")}</button>
 
       <div class="langs">
@@ -130,7 +149,7 @@
         </div>
       </div>
 
-      <div class="footer microlabel">{t("onb.footer")}{appVersion ? ` · v${appVersion}` : ""}</div>
+      <div class="footer microlabel">{osText("onb.footer")}{appVersion ? ` · v${appVersion}` : ""}</div>
     </div>
   {:else if step === "ai"}
     <div class="card connect">
@@ -290,11 +309,13 @@
     display: grid;
     place-items: center;
     overflow-y: auto;
+    overflow-x: clip;
     padding: 32px;
   }
   .card {
-    width: 460px;
-    max-width: 100%;
+    width: 100%;
+    max-width: 460px;
+    min-width: 0;
   }
 
   .wordmark {
@@ -313,6 +334,7 @@
     font-weight: 800;
     letter-spacing: -0.03em;
     line-height: 1.05;
+    overflow-wrap: break-word;
   }
   h1 em {
     font-style: normal;
@@ -330,6 +352,43 @@
     font-size: 14px;
     line-height: 1.55;
     max-width: 400px;
+  }
+
+  /* ---- Small screens: fluid type, top-anchored card, tappable inputs ---- */
+  @media (max-width: 760px) {
+    .onboarding {
+      place-items: start center;
+      align-content: start;
+      padding: 28px 20px 56px;
+    }
+    .wordmark {
+      margin-bottom: 32px;
+    }
+    h1 {
+      font-size: clamp(32px, 10.5vw, 44px);
+    }
+    h2 {
+      font-size: 23px;
+    }
+    .subtitle {
+      max-width: 100%;
+    }
+    .langs {
+      margin-top: 36px;
+    }
+    .provider-tabs {
+      overflow-x: auto;
+    }
+    .ai-key input {
+      font-size: 16px;
+      max-width: 100%;
+    }
+    .ai-actions {
+      flex-wrap: wrap;
+    }
+    .ai-enable {
+      flex: 1 1 auto;
+    }
   }
 
   .primary {
@@ -401,6 +460,19 @@
     gap: 4px;
     margin-top: 20px;
     border-bottom: 1px solid var(--hairline);
+  }
+  @media (max-width: 760px) {
+    .provider-tabs {
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .provider-tabs::-webkit-scrollbar {
+      display: none;
+    }
+    .provider-tab {
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
   }
   .provider-tab {
     padding: 7px 12px 9px;

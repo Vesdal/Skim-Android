@@ -97,7 +97,7 @@
               {#each turn.citations as c (c.index)}
                 <button class="source-chip" onclick={() => oncitation(c)}>
                   <span class="source-index">{c.index}</span>
-                  {c.subject || c.from}
+                  <span class="source-subject">{c.subject || c.from}</span>
                 </button>
               {/each}
             </div>
@@ -302,6 +302,16 @@
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--accent);
+    flex-shrink: 0;
+  }
+  /* The subject must be a real flex item to ellipsize — anonymous text never
+     shrinks and runs past the chip's edge. */
+  .source-subject {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .chat-answer.error {
     background: transparent;

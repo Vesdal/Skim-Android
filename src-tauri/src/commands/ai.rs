@@ -560,6 +560,7 @@ pub async fn open_ai_window(app: AppHandle, session_id: u64, title: String) -> R
     // Asking again for a chat that already has a window means "show me that
     // window", not "open a second one onto the same conversation".
     if let Some(existing) = app.get_webview_window(&label) {
+        #[cfg(desktop)]
         let _ = existing.unminimize();
         let _ = existing.set_focus();
         return Ok(());
@@ -573,18 +574,21 @@ pub async fn open_ai_window(app: AppHandle, session_id: u64, title: String) -> R
         .keys()
         .filter(|label| label.starts_with("ai-chat-"))
         .count();
-    let window = tauri::WebviewWindowBuilder::new(
+    let builder = tauri::WebviewWindowBuilder::new(
         &app,
         label,
         tauri::WebviewUrl::App(format!("index.html#/chat/{session_id}").into()),
     )
     .title(title)
     .inner_size(640.0, 760.0)
-    .min_inner_size(420.0, 420.0)
-    .decorations(false)
-    .center()
-    .build()
-    .map_err(|e| SkimError::other("window", e.to_string()))?;
+    .min_inner_size(420.0, 420.0);
+    // Frameless centered windows only exist on desktop; mobile shows the
+    // view fullscreen.
+    #[cfg(desktop)]
+    let builder = builder.decorations(false).center();
+    let window = builder
+        .build()
+        .map_err(|e| SkimError::other("window", e.to_string()))?;
 
     if open > 0 {
         // Cascade off the centre; wrap after a few so windows stay on screen.

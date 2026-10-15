@@ -1,0 +1,12 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Theme.skim" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Edge-to-edge: barre di sistema trasparenti, il contenuto va sotto
+             status bar, punch-hole e gesture bar; le safe-area le gestisce la
+             WebView via CSS env(). -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">?attr/isLightTheme</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+</resources>

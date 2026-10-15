@@ -7,6 +7,7 @@
     errorMessage,
     errorCode,
     credentialStoreError,
+    reportError,
     type AddAccountInput,
     type OauthAvailability,
   } from "../../lib/api";
@@ -42,8 +43,16 @@
   let smtpPort = $state(587);
   let smtpSecurity = $state("starttls");
   let busy: "none" | "google" | "microsoft" | "password" = $state("none");
-  let error = $state("");
-  // Set when Microsoft sign-in works but the Outlook mailbox has IMAP disabled;
+  // Browser-mediated sign-ins wait up to 10 minutes for the redirect while the
+  // user is over in the browser — always offer a way out. A late answer from
+  // a cancelled attempt is ignored instead of navigating out from under them.
+  let oauthSeq = 0;
+  function cancelOauth() {
+    oauthSeq++;
+    busy = "none";
+    error = "";
+  }
+  let error = $state("");  // Set when Microsoft sign-in works but the Outlook mailbox has IMAP disabled;
   // shows a fix-it prompt with a link to the setting and a retry.
   let imapSetupNeeded = $state(false);
   // Set when Windows refuses to store the credential — the sign-in itself worked,
@@ -121,6 +130,7 @@
   }
 
   async function connectGoogle() {
+    const seq = ++oauthSeq;
     busy = "google";
     error = "";
     imapSetupNeeded = false;
@@ -128,15 +138,18 @@
     retryAttempt = connectGoogle;
     try {
       const account = await api.startGoogleOauth();
+      if (seq !== oauthSeq) return;
       onconnected(account);
     } catch (e) {
+      if (seq !== oauthSeq) return;
       showError(e);
     } finally {
-      busy = "none";
+      if (seq === oauthSeq) busy = "none";
     }
   }
 
   async function connectMicrosoft() {
+    const seq = ++oauthSeq;
     busy = "microsoft";
     error = "";
     imapSetupNeeded = false;
@@ -144,8 +157,10 @@
     retryAttempt = connectMicrosoft;
     try {
       const account = await api.startMicrosoftOauth();
+      if (seq !== oauthSeq) return;
       onconnected(account);
     } catch (e) {
+      if (seq !== oauthSeq) return;
       // Outlook.com mailbox with IMAP switched off: guide the user to the setting
       // instead of showing a raw error, and let them retry in place. The panel
       // links to outlook.live.com, which only fits a personal mailbox — a tenant
@@ -156,12 +171,29 @@
         showError(e);
       }
     } finally {
-      busy = "none";
+      if (seq === oauthSeq) busy = "none";
     }
   }
 
   function openOutlookSettings() {
     void openUrl(OUTLOOK_IMAP_SETTINGS_URL);
+  }
+
+  // The backend answers within ~60s worst case (20s connect + 30s sign-in +
+  // store/sync setup) and has its own backstop besides; if the answer still
+  // hasn't arrived, unstick the button with a retryable error instead of
+  // sitting on "Connecting…" forever. A late success still counts — the
+  // account was created — while a late failure is already covered.
+  const CONNECT_TIMEOUT_MS = 100_000;
+  let connectSeq = 0;
+  function withTimeout<T>(p: Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject({ message: t("ops.failed") }), CONNECT_TIMEOUT_MS);
+    });
+    return Promise.race([p.finally(() => {
+      if (timer) clearTimeout(timer);
+    }), timeout]);
   }
 
   async function connectPassword(ev: SubmitEvent) {
@@ -174,6 +206,7 @@
       await onEmailChange();
       return;
     }
+    const attempt = ++connectSeq;
     busy = "password";
     error = "";
     imapSetupNeeded = false;
@@ -190,12 +223,23 @@
         smtpPort,
         smtpSecurity,
       };
-      const account = await api.addAccount(input, password);
+      const account = await withTimeout(api.addAccount(input, password));
+      if (attempt !== connectSeq) return; // superseded — a newer attempt owns the UI
       onconnected(account);
     } catch (e) {
+      if (attempt !== connectSeq) return;
+      reportStuck(e);
       showError(e);
     } finally {
-      busy = "none";
+      if (attempt === connectSeq) busy = "none";
+    }
+  }
+
+  /** A connect attempt that outlived every backend budget is worth knowing
+   *  about: log it for diagnostics instead of losing it silently. */
+  function reportStuck(e: unknown) {
+    if (errorCode(e) === "" && e && typeof e === "object" && "message" in e) {
+      reportError("connect-timeout", e);
     }
   }
 
@@ -296,9 +340,17 @@
     <span class="microlabel">{t("onb.email")}</span>
     <input
       type="email"
+      inputmode="email"
+      enterkeyhint="go"
       bind:this={emailInput}
       bind:value={email}
       onblur={onEmailChange}
+      oninput={() => {
+        // Mobile keyboards often never blur the field (no second tap target
+        // until the method zone appears) — reveal it as soon as the address
+        // looks complete. The sequence guard drops stale lookups.
+        if (email.includes("@")) void onEmailChange();
+      }}
       required
       spellcheck="false"
       autocomplete="off"
@@ -337,6 +389,11 @@
             {t("onb.continue_google")} →
           {/if}
         </button>
+        {#if busy === "google"}
+          <button type="button" class="linkish center" onclick={cancelOauth}>
+            {t("settings.cancel")}
+          </button>
+        {/if}
         {#if !google.verified}
           <div class="caveat">{t("onb.google_unverified_note")}</div>
         {/if}
@@ -360,6 +417,11 @@
           {t("onb.continue_microsoft")} →
         {/if}
       </button>
+      {#if busy === "microsoft"}
+        <button type="button" class="linkish center" onclick={cancelOauth}>
+          {t("settings.cancel")}
+        </button>
+      {/if}
       {#if !microsoft.verified}
         <div class="caveat">{t("onb.ms_unverified_note")}</div>
       {/if}
@@ -407,6 +469,11 @@
       >
         {busy === "microsoft" ? t("onb.waiting_microsoft") : t("onb.work_account_microsoft")}
       </button>
+      {#if busy === "microsoft"}
+        <button type="button" class="linkish center" onclick={cancelOauth}>
+          {t("settings.cancel")}
+        </button>
+      {/if}
     {/if}
   {/if}
 
@@ -623,6 +690,20 @@
   }
   .wide {
     grid-column: 1 / -1;
+  }
+
+  @media (max-width: 760px) {
+    .grid {
+      grid-template-columns: 1fr;
+    }
+    .grid + .primary {
+      width: 100%;
+      min-height: 46px;
+    }
+    input {
+      font-size: 16px;
+      max-width: 100%;
+    }
   }
 
   .error {

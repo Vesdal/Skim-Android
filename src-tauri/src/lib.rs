@@ -87,36 +87,49 @@ pub fn run() {
         .install_default()
         .ok();
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            // A protocol-activated toast click relaunches Skim with a
-            // `skim://…` argument, forwarded here to the running instance.
-            if let Some(uri) = args.iter().find(|a| a.starts_with("skim://")) {
-                notify::handle_skim_uri(app, uri, true);
-            } else {
-                // A plain second launch surfaces the running instance (it may
-                // be hidden in the tray).
-                show_main_window(app);
-            }
-        }))
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--minimized"]),
-        ))
-        .plugin(
-            tauri_plugin_window_state::Builder::default()
-                // Visibility is controlled by us (tray / --minimized), not
-                // by the previous session.
-                .with_state_flags(
-                    tauri_plugin_window_state::StateFlags::all()
-                        & !tauri_plugin_window_state::StateFlags::VISIBLE,
-                )
-                .build(),
-        )
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+    // Desktop-only plugins: none of these exist on mobile (single instance,
+    // autostart and window restore are OS-managed there; updates come from
+    // reinstalling the APK).
+    #[cfg(desktop)]
+    {
+        builder = builder
+            .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+                // A protocol-activated toast click relaunches Skim with a
+                // `skim://…` argument, forwarded here to the running instance.
+                if let Some(uri) = args.iter().find(|a| a.starts_with("skim://")) {
+                    notify::handle_skim_uri(app, uri, true);
+                } else {
+                    // A plain second launch surfaces the running instance (it may
+                    // be hidden in the tray).
+                    show_main_window(app);
+                }
+            }))
+            .plugin(tauri_plugin_autostart::init(
+                tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                Some(vec!["--minimized"]),
+            ))
+            .plugin(
+                tauri_plugin_window_state::Builder::default()
+                    // Visibility is controlled by us (tray / --minimized), not
+                    // by the previous session.
+                    .with_state_flags(
+                        tauri_plugin_window_state::StateFlags::all()
+                            & !tauri_plugin_window_state::StateFlags::VISIBLE,
+                    )
+                    .build(),
+            );
+    }
+    builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init());
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+    builder
         .register_asynchronous_uri_scheme_protocol("skim-cid", |ctx, request, responder| {
             // Serves cached inline (cid:) images to the message iframe:
             // http://skim-cid.localhost/<message_pk>/<url-encoded content id>
@@ -210,21 +223,25 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir).ok();
+            #[cfg(target_os = "android")]
+            crate::secrets::init(&data_dir);
             notify::register_aumid();
             notify::register_url_scheme();
             let db = db::Db::open(&data_dir.join("skim.db"))?;
             app.manage(AppState::new(db.clone(), data_dir.clone()));
 
-            let locale = db
+            let _locale = db
                 .with(|conn| db::queries::get_setting(conn, "locale"))
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| "en".into());
-            setup_tray(app.handle(), &locale)?;
+            #[cfg(desktop)]
+            setup_tray(app.handle(), &_locale)?;
 
-            // Autostart is on by default. The registry entry is reconciled
-            // with the stored preference on every launch — the uninstaller
-            // removes the Run key, so a reinstall must recreate it.
+            // Autostart is on by default (desktop only — mobile launches are
+            // OS-managed). The registry entry is reconciled with the stored
+            // preference on every launch.
+            #[cfg(desktop)]
             {
                 use tauri_plugin_autostart::ManagerExt;
                 let wanted = db
@@ -408,6 +425,7 @@ pub fn run() {
 pub(crate) fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
+        #[cfg(desktop)]
         let _ = window.unminimize();
         let _ = window.set_focus();
         // Hiding to the tray only hides the webview — no frontend code runs
@@ -427,6 +445,7 @@ pub(crate) fn show_main_window(app: &tauri::AppHandle) {
     });
 }
 
+#[cfg(desktop)]
 fn tray_labels(locale: &str) -> (&'static str, &'static str) {
     match locale {
         "ru" => ("Открыть Skim", "Выход"),
@@ -443,6 +462,7 @@ fn tray_labels(locale: &str) -> (&'static str, &'static str) {
     }
 }
 
+#[cfg(desktop)]
 fn setup_tray(app: &tauri::AppHandle, locale: &str) -> tauri::Result<()> {
     use tauri::menu::{Menu, MenuItem};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};

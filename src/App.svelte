@@ -32,6 +32,8 @@
   let ready = $state(false);
 
   const inTauri = "__TAURI_INTERNALS__" in window;
+  const onAndroid =
+    typeof navigator !== "undefined" && navigator.userAgent.includes("Android");
   // Onboarding is only the right screen once we know there is nothing to show.
   // The shell is now drawn before `boot()` has answered, so an empty account
   // list can simply mean the answer hasn't arrived yet — and a returning user
@@ -41,6 +43,131 @@
   // Opening a message dismisses the recap panel.
   $effect(() => {
     if (mail.selectedThreadId !== null && ui.recapOpen) ui.closeRecap();
+  });
+
+  // Mobile drawer follows navigation: picking a folder or a thread closes it.
+  // NB: drawerOpen is read untracked — otherwise opening the drawer would
+  // retrigger this effect and immediately close it again.
+  $effect(() => {
+    void mail.selectedFolderId;
+    void mail.selectedThreadId;
+    untrack(() => {
+      if (ui.drawerOpen) ui.closeDrawer();
+    });
+  });
+
+  // Stay in sync without manual reloads: re-sync when coming back to the app
+  // (the OS may have killed sockets while we were away). Throttled — IMAP
+  // IDLE already pushes live mail while open, and each sync skips untouched
+  // folders server-side, so this costs no background battery: nothing runs
+  // while the app is closed.
+  $effect(() => {
+    let lastFgSync = 0;
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (now - lastFgSync < 30_000) return;
+      lastFgSync = now;
+      if (mail.accounts.length > 0) void mail.syncNow();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+    };
+  });
+
+  // Android system back button (MainActivity asks `window.__skimGoBack` before
+  // falling through to WebView history / exit). Topmost surface first; the
+  // reader slot (thread / recap / draft editor) steps back to the list.
+  // Synchronous on purpose — the native side needs an immediate answer.
+  $effect(() => {
+    const goBack = () => {
+      if (palette.open) {
+        palette.hide();
+        return true;
+      }
+      if (ui.shortcutsOpen) {
+        ui.closeShortcuts();
+        return true;
+      }
+      if (ui.movePicker !== null) {
+        ui.closeMove();
+        return true;
+      }
+      if (ui.folderEditor !== null) {
+        ui.closeFolderEditor();
+        return true;
+      }
+      if (ui.settingsOpen) {
+        ui.closeSettings();
+        return true;
+      }
+      if (expandedAsk) {
+        aiSessions.close(expandedAsk);
+        return true;
+      }
+      if (inlineAsk?.open) {
+        aiSessions.close(inlineAsk);
+        return true;
+      }
+      if (ui.drawerOpen) {
+        ui.closeDrawer();
+        return true;
+      }
+      if (mail.selecting) {
+        mail.clearSelection();
+        return true;
+      }
+      if (ui.recapOpen) {
+        ui.closeRecap();
+        return true;
+      }
+      if (mail.selectedThreadId !== null || draftEditorId !== null) {
+        mail.selectedThreadId = null;
+        mail.selectedMessageId = null;
+        return true;
+      }
+      // Inside a folder: step back to its inbox instead of leaving the app.
+      const inbox = mail.folders.find((f) => f.role === "inbox");
+      if (inbox && mail.selectedFolderId !== inbox.id) {
+        void mail.selectFolder(inbox.id);
+        return true;
+      }
+      return false;
+    };
+    (window as unknown as { __skimGoBack?: () => boolean }).__skimGoBack = goBack;
+    return () => {
+      delete (window as unknown as { __skimGoBack?: () => boolean }).__skimGoBack;
+    };
+  });
+
+  // Haptics, centrally: every touch tap on a button ticks once, on press.
+  // One delegated listener covers the whole app (present and future buttons);
+  // desktops have no vibrate API so this is a silent no-op there.
+  $effect(() => {
+    if (
+      typeof window === "undefined" ||
+      typeof window.matchMedia !== "function" ||
+      !window.matchMedia("(pointer: coarse)").matches
+    )
+      return;
+    const onDown = (e: PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      const el = e.target as HTMLElement | null;
+      if (el?.closest?.("button")) {
+        try {
+          navigator.vibrate?.(10);
+        } catch {
+          // haptics are best-effort
+        }
+      }
+    };
+    document.addEventListener("pointerdown", onDown, { passive: true });
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+    };
   });
 
   // ---- AI recap ----
@@ -101,6 +228,12 @@
   let draftEditorId = $state<number | null>(null);
   let draftOrigin = $state<number | null>(null);
   let draftResolveToken = 0;
+
+  // Mobile single-pane: the reader slot (thread, recap or draft editor)
+  // takes the whole screen; the list shows otherwise.
+  const showReader = $derived(
+    mail.selectedThreadId !== null || ui.recapOpen || draftEditorId !== null,
+  );
 
   $effect(() => {
     const folder = mail.selectedFolder;
@@ -172,14 +305,19 @@
           settings = await api.getSettings();
           if (settings.locale) await setLocale(settings.locale as never);
           // Apply the stored theme (migrating legacy values); persist the
-          // normalized string back once if migration changed it.
+          // normalized string back once if migration changed it. Nothing is
+          // written when no theme was stored yet, so a fresh install keeps
+          // following the OS lightness on every boot until the user picks one.
           const normalized = ui.hydrate(settings.theme);
-          if (settings.theme !== normalized) void api.setSetting("theme", normalized).catch(() => {});
+          if (settings.theme && settings.theme !== normalized)
+            void api.setSetting("theme", normalized).catch(() => {});
           if (settings.sidebar_collapsed) ui.setSidebarCollapsed(settings.sidebar_collapsed === "on");
         } catch {
           // settings are best-effort at boot
         }
-        updater.init(settings);
+        // Desktop-only: mobile updates come from reinstalling the APK, never
+        // from the Windows updater asking inside the app.
+        if (!onAndroid) updater.init(settings);
         // The shell is drawn whatever the mailbox is doing. `boot()` reads a
         // database the startup sync is busy filling, so it can be slow, and if
         // it throws there is nothing later that would ever set `ready` — either
@@ -470,8 +608,19 @@
   <Titlebar />
   {#if ready}
     {#if !needsOnboarding}
-      <main class="panes">
+      <main
+        class="panes"
+        class:has-thread={showReader}
+        class:drawer-open={ui.drawerOpen}
+      >
         <Sidebar />
+        {#if ui.drawerOpen}
+          <button
+            class="drawer-scrim"
+            aria-label={t("a11y.close")}
+            onclick={() => ui.closeDrawer()}
+          ></button>
+        {/if}
         <MessageList />
         {#if mail.selectedFolder?.role === "drafts" && draftEditorId !== null}
           {#key draftEditorId}
@@ -529,8 +678,16 @@
 <style>
   .app {
     height: 100%;
+    height: 100dvh;
     display: flex;
     flex-direction: column;
+    box-sizing: border-box;
+    /* Edge-to-edge: consuma le safe-area (status bar, punch-hole, gesture
+       bar) dentro l'app invece di lasciare bande nere o contenuti coperti. */
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
   }
   .panes {
     flex: 1;
@@ -546,5 +703,135 @@
     z-index: 100;
     display: flex;
     background: var(--bg);
+  }
+  .drawer-scrim {
+    display: none;
+  }
+
+  /* ---- Medium screens (landscape phones, small tablets, narrow windows) ----
+     La sidebar diventa un drawer anche qui: a 761–1100px tre pannelli fissi
+     (224 + 372 + lettore) non ci stanno e il lettore resterebbe schiacciato.
+     Lista + lettore restano affiancati, la lista si restringe. */
+  @media (max-width: 1100px) {
+    .panes > :global(.sidebar) {
+      position: fixed;
+      top: calc(var(--titlebar-h) + env(safe-area-inset-top, 0px));
+      bottom: env(safe-area-inset-bottom, 0px);
+      left: env(safe-area-inset-left, 0px);
+      width: min(300px, 84vw);
+      z-index: 60;
+      background: var(--bg);
+      border-right: 1px solid var(--hairline-strong);
+      box-shadow: var(--shadow-pop);
+      transform: translateX(-105%);
+      visibility: hidden;
+      transition:
+        transform 0.25s ease-out,
+        visibility 0.25s;
+    }
+    .panes.drawer-open > :global(.sidebar) {
+      transform: translateX(0);
+      visibility: visible;
+    }
+    .drawer-scrim {
+      position: fixed;
+      inset: calc(var(--titlebar-h) + env(safe-area-inset-top, 0px)) 0 0 0;
+      z-index: 55;
+      background: rgba(0, 0, 0, 0.35);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition:
+        opacity 0.22s ease-out,
+        visibility 0.22s;
+    }
+    .panes.drawer-open .drawer-scrim {
+      display: block;
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+    }
+    .panes > :global(.list) {
+      width: min(340px, 44vw);
+      flex-shrink: 0;
+    }
+  }
+
+  /* ---- Mobile single-pane (phones, narrow windows) ----
+     One pane at a time at full width: the folder list, or the reader slot
+     (thread / recap / draft editor). Type stays at desktop sizes — nothing
+     shrinks to fit. Motion is transform/opacity only, and off entirely under
+     reduced-motion. */
+  @media (max-width: 760px) {
+    .panes > :global(.list),
+    .panes > :global(section:last-child),
+    .panes > :global(.compose-form) {
+      width: 100%;
+      flex: 1 1 auto;
+      border-right: none;
+    }
+    /* Reader slot children: ReadingPane, ComposeForm, AiRecap section. */
+    .panes:not(.has-thread) > :global(section:last-child),
+    .panes:not(.has-thread) > :global(.compose-form) {
+      display: none;
+    }
+    .panes.has-thread > :global(.list) {
+      display: none;
+    }
+    .panes:not(.has-thread) > :global(.list) {
+      animation: pane-in 0.22s ease-out;
+    }
+    .panes.has-thread > :global(section:last-child),
+    .panes.has-thread > :global(.compose-form) {
+      animation: reader-in 0.25s ease-out;
+    }
+  }
+  @keyframes pane-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes reader-in {
+    from {
+      transform: translateX(28px);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .panes > :global(.sidebar),
+    .drawer-scrim {
+      transition: none;
+    }
+    .panes:not(.has-thread) > :global(.list),
+    .panes.has-thread > :global(section:last-child),
+    .panes.has-thread > :global(.compose-form) {
+      animation: none;
+    }
+  }
+  /* No window chrome on touch devices: the OS owns the window. La titlebar
+     desktop (drag, min/max/close) su Android e' spazio sprecato e coprirebbe
+     la status bar in edge-to-edge: la lista ha gia' l'hamburger e il lettore
+     il back. */
+  @media (pointer: coarse) {
+    .app > :global(.titlebar) {
+      display: none;
+    }
+    .ask-full {
+      inset: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+    }
+    /* Senza titlebar il drawer parte dalla safe-area in alto. */
+    .panes > :global(.sidebar) {
+      top: env(safe-area-inset-top, 0px);
+    }
+    .drawer-scrim {
+      inset: env(safe-area-inset-top, 0px) 0 0 0;
+    }
   }
 </style>

@@ -124,9 +124,30 @@ async fn finish_add_account(
 }
 
 /// Verify credentials against the IMAP server, then persist the account and
-/// start syncing.
+/// start syncing. The whole attempt runs under one backstop timeout: every
+/// stage has its own shorter timeout, but on a new platform a stage can still
+/// stall in a way no per-stage budget covers (and the connect screen would
+/// sit on "Connecting…" forever). The command always answers.
+const ADD_ACCOUNT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
 #[tauri::command]
 pub async fn add_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    input: AddAccountInput,
+    password: String,
+) -> Result<Account> {
+    tokio::time::timeout(ADD_ACCOUNT_TIMEOUT, add_account_inner(app, state, input, password))
+        .await
+        .map_err(|_| {
+            SkimError::other(
+                "timeout",
+                "sign-in took too long — check your connection and try again",
+            )
+        })?
+}
+
+async fn add_account_inner(
     app: AppHandle,
     state: State<'_, AppState>,
     input: AddAccountInput,

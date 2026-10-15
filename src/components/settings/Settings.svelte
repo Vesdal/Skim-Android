@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getVersion } from "@tauri-apps/api/app";
   import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
+  import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { aiApi, aiStream, api, credentialStoreError, errorMessage } from "../../lib/api";
   import type { AiModel, AiProvider } from "../../lib/api";
@@ -14,6 +15,31 @@
   import ConnectForm from "../onboarding/ConnectForm.svelte";
 
   let { onclose }: { onclose: () => void } = $props();
+
+  // Android has no window chrome, autostart registry or Credential Manager —
+  // those rows never render there. "Android" needs no translation.
+  const onAndroid =
+    typeof navigator !== "undefined" && navigator.userAgent.includes("Android");
+  function osText(key: string): string {
+    const s = t(key);
+    return onAndroid ? s.replaceAll("Windows", "Android") : s;
+  }
+
+  // Android notifications follow the OS permission (asked once, natively —
+  // afterwards Android remembers and the system settings own it). The switch
+  // reflects the system state; tapping it re-asks only while denied.
+  let notifGranted = $state(false);
+  async function ensureNotifications() {
+    try {
+      if (await isPermissionGranted().catch(() => false)) {
+        notifGranted = true;
+        return;
+      }
+      notifGranted = (await requestPermission().catch(() => "denied")) === "granted";
+    } catch {
+      notifGranted = false;
+    }
+  }
 
   // Each matrix cell previews a *different* theme than the active one, so the
   // colors can't come from CSS variables — they're literals mirroring tokens.css
@@ -152,9 +178,14 @@
       if (s.ai_instructions) aiInstructions = s.ai_instructions;
       if (s.ai_style_profile) styleProfile = s.ai_style_profile;
     });
-    void isEnabled()
-      .then((on) => (autostart = on))
-      .catch(() => {});
+    // Autostart is a desktop concept — the plugin doesn't exist on mobile.
+    if (!onAndroid) {
+      void isEnabled()
+        .then((on) => (autostart = on))
+        .catch(() => {});
+    } else {
+      void ensureNotifications();
+    }
     void getVersion()
       .then((v) => (appVersion = v))
       .catch(() => {});
@@ -714,10 +745,18 @@
       </section>
 
       <section class="toggles">
-        {@render toggleRow(t("settings.autostart"), autostart, () => setAutostart(!autostart))}
-        {@render toggleRow(t("settings.notifications"), notifications === "on", () =>
-          setNotifications(notifications === "on" ? "off" : "on"),
-        )}
+        {#if !onAndroid}
+          {@render toggleRow(t("settings.autostart"), autostart, () => setAutostart(!autostart))}
+        {/if}
+        {#if onAndroid}
+          {@render toggleRow(t("settings.notifications"), notifGranted, () =>
+            void ensureNotifications(),
+          )}
+        {:else}
+          {@render toggleRow(t("settings.notifications"), notifications === "on", () =>
+            setNotifications(notifications === "on" ? "off" : "on"),
+          )}
+        {/if}
         {@render toggleRow(t("settings.group_threads"), groupThreads === "on", () =>
           setGroupThreads(groupThreads === "on" ? "off" : "on"),
         )}
@@ -1023,7 +1062,7 @@
       </section>
 
       <div class="about microlabel">
-        Skim{appVersion ? ` v${appVersion}` : ""} · {t("onb.footer")} · MIT ·
+        Skim{appVersion ? ` v${appVersion}` : ""} · {osText("onb.footer")} · MIT ·
         <button class="gh-link" onclick={() => openUrl("https://github.com/nikserg/skim")}>
           GitHub
         </button>
@@ -1105,10 +1144,39 @@
   .strong {
     font-weight: 600;
     font-size: 13.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .dim {
     color: var(--text-faint);
     font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Narrow screens: long addresses wrap the actions below instead of sliding
+     under them. */
+  @media (max-width: 760px) {
+    .row {
+      flex-wrap: wrap;
+    }
+  }
+  /* Touch: reachable targets, no hover-only affordances. */
+  @media (pointer: coarse) {
+    .ghost,
+    .danger {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+    }
+    .close {
+      width: 44px;
+      height: 44px;
+    }
+    .tab {
+      min-height: 44px;
+    }
   }
   .avatar {
     width: 32px;
@@ -1418,6 +1486,22 @@
     color: var(--text);
     font-weight: 600;
     border-bottom-color: var(--accent);
+  }
+  /* Narrow screens: tabs keep one line and scroll sideways (Material-style
+     scrollable tabs) instead of wrapping — a wrapped label detaches the
+     active indicator from its text and reads as broken. */
+  @media (max-width: 760px) {
+    .tabs {
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .tabs::-webkit-scrollbar {
+      display: none;
+    }
+    .tab {
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
   }
   .model-slug {
     display: block;

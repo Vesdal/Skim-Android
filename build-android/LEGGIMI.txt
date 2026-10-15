@@ -1,0 +1,1 @@
+NON CANCELLARE skim-android.keystore e skim-android-keystore.txt: senza questi due file ogni aggiornamento richiede di disinstallare l app e riconfigurare gli account.

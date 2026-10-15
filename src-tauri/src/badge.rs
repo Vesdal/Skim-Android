@@ -29,6 +29,9 @@ pub async fn refresh(app: &AppHandle) {
             .unwrap_or(0)
             .max(0)
     };
+    // Mobile has no tray or taskbar overlay — the count is recomputed but unused.
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let _ = count;
 
     // Taskbar overlay icon (main window). `None` removes it.
     #[cfg(target_os = "windows")]
@@ -38,7 +41,9 @@ pub async fn refresh(app: &AppHandle) {
     }
 
     // Tray icon: composite the badge onto the base icon, or restore the base
-    // when there is nothing unread.
+    // when there is nothing unread. Desktop only — the tray module does not
+    // exist on mobile.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if let (Some(tray), Some(base)) = (app.tray_by_id("main"), app.default_window_icon()) {
         let icon = if count > 0 {
             render_tray(base, count)

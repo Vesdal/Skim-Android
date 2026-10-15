@@ -102,4 +102,17 @@
   .tool:disabled {
     opacity: 0.35;
   }
+  /* Touch: Gmail-sized action targets in the selection bar. */
+  @media (pointer: coarse) {
+    .tool {
+      min-width: 44px;
+      min-height: 44px;
+      justify-content: center;
+    }
+    .link {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+    }
+  }
 </style>

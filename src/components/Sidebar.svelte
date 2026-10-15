@@ -3,7 +3,7 @@
   import { folderIcon, folderLabel, folderTree, ownFoldersHeading } from "../lib/folders";
   import { t } from "../lib/i18n/index.svelte";
   import { ai } from "../lib/stores/ai.svelte";
-  import { mail } from "../lib/stores/mail.svelte";
+  import { UNIFIED, mail } from "../lib/stores/mail.svelte";
   import { palette } from "../lib/stores/palette.svelte";
   import { ui } from "../lib/stores/ui.svelte";
   import { updater } from "../lib/stores/update.svelte";
@@ -19,9 +19,30 @@
   const noUnreadRoles = new Set(["sent", "drafts"]);
   const showsUnread = (role: string | null) => !(role && noUnreadRoles.has(role));
 
-  const mainFolders = $derived(
-    mail.folders.filter((f) => f.role !== null && f.role !== "all" && f.role !== "starred"),
-  );
+  // One row per role: providers sometimes list two folders sharing a role
+  // (a rename the sync hasn't reconciled yet), and the nav must show the
+  // account's Trash once — or the whole inbox's in the unified view. Never
+  // drop the open folder from under the user while collapsing.
+  const mainFolders = $derived.by(() => {
+    const seen = new Set<string>();
+    const out: typeof mail.folders = [];
+    const rows = mail.folders.filter(
+      (f) => f.role !== null && f.role !== "all" && f.role !== "starred",
+    );
+    for (const f of rows) {
+      const role = f.role ?? "";
+      if (!seen.has(role)) {
+        seen.add(role);
+        out.push(f);
+        continue;
+      }
+      const at = out.findIndex((g) => (g.role ?? "") === role);
+      if (at >= 0 && f.id === mail.selectedFolderId && out[at].id !== f.id) {
+        out[at] = f;
+      }
+    }
+    return out;
+  });
   // The user's own folders, as a tree: a nested folder prints only what its
   // parent row does not already say, and leans on an indent for the rest.
   const labels = $derived(folderTree(mail.folders.filter((f) => f.role === null)));
@@ -43,16 +64,47 @@
     </button>
 
     <button class="search" onclick={() => palette.show()} title={collapsed ? t("nav.search") : undefined}>
-      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
-        <circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" />
-      </svg>
+      {#if ai.keyPresent}
+        <span class="spark" aria-hidden="true">✦</span>
+      {:else}
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+          <circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" />
+        </svg>
+      {/if}
       <span class="name">{ai.keyPresent ? t("palette.placeholder_ai") : t("nav.search")}</span>
       <kbd>Ctrl K</kbd>
     </button>
 
+    {#if mail.accounts.length > 1}
+      <!-- Mailbox scope: the only account switcher on touch devices, where the
+           desktop titlebar (and its switcher) is hidden. Desktop keeps both —
+           this one also serves narrow windows. Picking a scope closes the
+           drawer through the navigation effect in App. -->
+      <div class="section mailbox-switch">
+        <div class="microlabel heading">{t("accounts.switch")}</div>
+        <button
+          class="item"
+          class:selected={mail.unified}
+          onclick={() => mail.switchAccount(UNIFIED)}
+        >
+          <span class="avatar">✉</span>
+          <span class="name">{t("accounts.all_inboxes")}</span>
+        </button>
+        {#each mail.accounts as a (a.id)}
+          <button
+            class="item"
+            class:selected={!mail.unified && mail.account?.id === a.id}
+            onclick={() => mail.switchAccount(a.id)}
+            title={a.email}
+          >
+            <span class="avatar">{a.email.charAt(0).toUpperCase()}</span>
+            <span class="name">{a.email}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
     <div class="section">
-      {#each mainFolders as folder (folder.id)}
-        {@const name = folderLabel(folder)}
+      {#each mainFolders as folder (folder.id)}        {@const name = folderLabel(folder)}
         <button
           class="item"
           class:selected={mail.selectedFolderId === folder.id}
@@ -261,6 +313,12 @@
   .search:hover {
     background: var(--hover);
   }
+  .search .spark {
+    color: var(--accent);
+    font-size: 14px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
   kbd {
     margin-left: auto;
     font-family: var(--font-mono);
@@ -276,6 +334,16 @@
     display: flex;
     flex-direction: column;
     gap: 1px;
+  }
+  /* Mailbox scope switcher: mobile-only (the titlebar switcher it replaces is
+     hidden on touch devices). Desktop shows it too in narrow windows. */
+  .mailbox-switch {
+    display: none;
+  }
+  @media (max-width: 1100px) {
+    .mailbox-switch {
+      display: flex;
+    }
   }
   .heading {
     padding: 0 12px 6px;

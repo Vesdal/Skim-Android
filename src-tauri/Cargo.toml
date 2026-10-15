@@ -15,16 +15,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-single-instance = "2"
-tauri-plugin-autostart = "2"
-tauri-plugin-window-state = "2"
+# Base tauri without desktop-only features; `tray-icon` is added back for
+# desktop targets below (the tray module does not exist on mobile).
+tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
-# ~2.9: last release on reqwest 0.12 (ours) — 2.10+ pulls a second reqwest/hyper
-# copy via 0.13. `zip` feature off: Windows update artifacts are bare installers.
-tauri-plugin-updater = { version = "~2.9", default-features = false, features = ["rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -47,14 +43,41 @@ futures = "0.3"
 # `full_encoding`: without it GBK/Big5/Shift_JIS/EUC-KR decode as lossy UTF-8 —
 # all of CJK mail turns into U+FFFD. encoding_rs is already linked via lopdf.
 mail-parser = { version = "0.11", features = ["full_encoding"] }
-keyring = { version = "3", features = ["windows-native"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "blocking"] }
 base64 = "0.22"
 url = "2"
 # 0.11 matches the copy lopdf already pulls in — one build of sha2, not two.
 sha2 = "0.11"
 getrandom = "0.3"
 ammonia = "4"
+lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "pool"] }
+# default features off: chrono/jiff/time are only for PDF date fields, rayon
+# only parallelizes page ops — none of that serves plain text extraction.
+lopdf = { version = "0.44", default-features = false }
+# Trigram language detection for the reading pane's translate offer. Pure Rust,
+# tables compiled in, no model files. Pinned to ~0.16 on purpose: it shares
+# rusqlite's hashbrown 0.14, where 0.18 would compile a second copy (0.15).
+whatlang = "~0.16"
+
+# Desktop-only updater + tray + single-instance/autostart/window-state: none
+# of these plugins exist on mobile (updates come from reinstalling the APK).
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-window-state = "2"
+# ~2.9: last release on reqwest 0.12 (ours) — 2.10+ pulls a second reqwest/hyper
+# copy via 0.13. `zip` feature off: Windows update artifacts are bare installers.
+tauri-plugin-updater = { version = "~2.9", default-features = false, features = ["rustls-tls"] }
+
+# Android-only: bundled Mozilla roots for IMAP TLS (see tls_connector —
+# the platform verifier needs JVM init gymnastics that can kill the app).
+# Already in the tree via reqwest, so this adds no download.
+[target.'cfg(target_os = "android")'.dependencies]
+webpki-roots = "1"
+
+# Windows-only system bindings, credential vault and toast backend.
+[target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "0.7"
 # `Win32_NetworkManagement_Dns`: DnsQuery_W for onboarding's MX probe. The system
 # resolver (and its cache) instead of a bundled stub resolver — nothing new to
@@ -66,14 +89,7 @@ windows = { version = "0.61", features = [
   "Win32_NetworkManagement_Dns",
 ] }
 winreg = "0.55"
-lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder", "hostname", "pool"] }
-# default features off: chrono/jiff/time are only for PDF date fields, rayon
-# only parallelizes page ops — none of that serves plain text extraction.
-lopdf = { version = "0.44", default-features = false }
-# Trigram language detection for the reading pane's translate offer. Pure Rust,
-# tables compiled in, no model files. Pinned to ~0.16 on purpose: it shares
-# rusqlite's hashbrown 0.14, where 0.18 would compile a second copy (0.15).
-whatlang = "~0.16"
+keyring = { version = "3", features = ["windows-native"] }
 
 [profile.release]
 opt-level = "s"
@@ -83,4 +99,9 @@ strip = true
 # Unwind tables are ~6 MB of the binary (−23% off the NSIS installer). Nothing
 # relies on catching panics: PDF parsing (lopdf) returns Results instead of
 # panicking, so a malformed attachment can't take the app down.
+#
+# Android builds override this to `unwind` (see the RUSTFLAGS in the mobile
+# build notes): on a first-generation mobile port a panicking background task
+# must degrade into an error, never take the whole process down the way
+# `abort` would.
 panic = "abort"

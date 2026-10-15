@@ -13,6 +13,13 @@
     return f ? folderLabel(f) : t("nav.inbox");
   });
 
+  // Touch devices: no hover and no precise checkbox — once selecting, a tap
+  // ticks the row instead of opening it. Desktop keeps tap-to-open.
+  const coarse =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(pointer: coarse)").matches;
+
   const unread = $derived(mail.selectedFolder?.unreadCount ?? 0);
 
   // Only the user's own folders can be renamed or deleted — provider folders
@@ -93,6 +100,69 @@
       if (mail.threads.length >= 100) void mail.loadMoreThreads();
     }
   }
+
+  // ---- Pull-to-refresh (touch) ----
+  // Dragging down from the very top of the list reveals a spinner; releasing
+  // past the threshold re-syncs (or retries a failed load). Desktop keeps its
+  // existing sync affordances — this only engages for touch scrolls that start
+  // at scrollTop 0. Listeners are attached manually so touchmove can be
+  // non-passive (Svelte's ontouchmove is passive and couldn't preventDefault
+  // the rubber-band).
+  const PULL_THRESHOLD = 72;
+  let pullY = $state(0);
+  let pulling = $state(false);
+  let pullStartY: number | null = null;
+  let releaseRefresh = $state(false);
+  const refreshing = $derived(mail.syncState === "syncing");
+
+  function onTouchStart(e: TouchEvent) {
+    if (!rowsEl || rowsEl.scrollTop > 0) return;
+    pullStartY = e.touches[0].clientY;
+  }
+  function onTouchMove(e: TouchEvent) {
+    if (pullStartY === null || !rowsEl) return;
+    const dy = e.touches[0].clientY - pullStartY;
+    if (dy > 0 && rowsEl.scrollTop <= 0) {
+      pulling = true;
+      pullY = Math.min(dy * 0.5, 120);
+      if (e.cancelable) e.preventDefault();
+    } else if (dy <= 0) {
+      pulling = false;
+      pullY = 0;
+      pullStartY = null;
+    }
+  }
+  function onTouchEnd() {
+    if (pulling && pullY >= PULL_THRESHOLD) {
+      if (mail.loadFailed) void mail.retryLoad();
+      else void mail.syncNow();
+      releaseRefresh = true;
+    }
+    pulling = false;
+    pullStartY = null;
+    if (!releaseRefresh) pullY = 0;
+  }
+  $effect(() => {
+    const el = rowsEl;
+    if (!el) return;
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd);
+    el.addEventListener("touchcancel", onTouchEnd);
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
+    };
+  });
+  // The release indicator stays up while the sync it triggered is running.
+  $effect(() => {
+    if (!refreshing && releaseRefresh) {
+      releaseRefresh = false;
+      pullY = 0;
+    }
+  });
 </script>
 
 <section class="list">
@@ -102,6 +172,16 @@
            appearing: same height, no rows covered, no chrome when idle. -->
       <SelectionBar />
     {:else}
+      <button
+        class="nav-toggle"
+        onclick={() => ui.toggleDrawer()}
+        aria-label={t("nav.folders")}
+        title={t("nav.folders")}
+      >
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M1.5 4h13M1.5 8h13M1.5 12h13" />
+        </svg>
+      </button>
       <h1>{title}</h1>
       {#if editableFolder}
         <button class="edit" onclick={openEditor} title={t("folder.edit")} aria-label={t("folder.edit")}>
@@ -130,6 +210,19 @@
     {/if}
   </header>
   <div
+    class="pull"
+    class:settle={!pulling}
+    style="height: {pulling || releaseRefresh ? Math.max(pullY, releaseRefresh ? 48 : 0) : 0}px"
+    aria-hidden="true"
+  >
+    {#if refreshing}
+      <span class="spinner"></span>
+      <span>{t("sync.syncing")}</span>
+    {:else if pulling}
+      <span class="arrow" class:ready={pullY >= PULL_THRESHOLD}>↓</span>
+    {/if}
+  </div>
+  <div
     class="rows"
     class:selecting={mail.selecting}
     bind:this={rowsEl}
@@ -154,8 +247,14 @@
             : mail.selectedMessageId === thread.messageId}
           checked={mail.isSelected(rowKey(thread))}
           onselect={() => {
-            mail.selectedThreadId = thread.id;
-            mail.selectedMessageId = thread.messageId ?? null;
+            // In selection mode a touch tap ticks the row (the viewer opens
+            // only outside selection mode) — no precise checkbox needed.
+            if (coarse && mail.selecting) {
+              mail.toggleRow(rowKey(thread), false);
+            } else {
+              mail.selectedThreadId = thread.id;
+              mail.selectedMessageId = thread.messageId ?? null;
+            }
           }}
           ontoggle={(extend) => mail.toggleRow(rowKey(thread), extend)}
         />
@@ -191,6 +290,29 @@
     align-items: center;
     gap: 10px;
     min-width: 0;
+  }
+  /* Mobile drawer handle — desktop keeps the persistent sidebar. Visibile fino
+     a 1100px, dove la sidebar e' un drawer anche in landscape. */
+  .nav-toggle {
+    display: none;
+    width: 44px;
+    height: 44px;
+    margin: -8px 0 -8px -8px;
+    place-items: center;
+    border-radius: var(--radius-s);
+    color: var(--text-dim);
+  }
+  .nav-toggle:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  @media (max-width: 1100px) {
+    .nav-toggle {
+      display: grid;
+    }
+    .nav-hint {
+      display: none;
+    }
   }
   /* Sits right after the folder name, quiet until the header is hovered —
      it is a rare action and shouldn't compete with the title. */
@@ -265,6 +387,55 @@
   .rows {
     overflow-y: auto;
     flex: 1;
+  }
+  /* Pull-to-refresh indicator: stretches with the finger, settles on release. */
+  .pull {
+    overflow: hidden;
+    height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: var(--text-faint);
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  .pull.settle {
+    transition: height 0.2s ease-out;
+  }
+  .pull .arrow {
+    display: inline-block;
+    font-size: 15px;
+    line-height: 1;
+    opacity: 0.6;
+    transition: transform 0.15s ease-out;
+  }
+  .pull .arrow.ready {
+    opacity: 1;
+    transform: rotate(180deg);
+    color: var(--text-dim);
+  }
+  .pull .spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--hairline-strong);
+    border-top-color: var(--text-dim);
+    border-radius: 50%;
+    animation: pull-spin 0.9s linear infinite;
+  }
+  @keyframes pull-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pull.settle,
+    .pull .arrow {
+      transition: none;
+    }
+    .pull .spinner {
+      animation: none;
+    }
   }
   .empty {
     padding: 48px 16px;

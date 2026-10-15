@@ -7,6 +7,7 @@
   import { t } from "../lib/i18n/index.svelte";
   import { createSlowStart } from "../lib/slow-start.svelte";
   import { ai } from "../lib/stores/ai.svelte";
+  import { ui } from "../lib/stores/ui.svelte";
   import type { Account, Draft, DraftAttachment } from "../lib/types";
   import AddressInput from "./AddressInput.svelte";
   import WindowControls from "./WindowControls.svelte";
@@ -224,8 +225,39 @@
 
   // The composer runs in its own window with its own copy of the `ai` store;
   // refresh it here so this webview sees the active provider and key too.
+  let aiChecked = $state(false);
   $effect(() => {
-    void ai.refresh().then(() => (aiAvailable = ai.keyPresent));
+    void ai.refresh().then(() => {
+      aiAvailable = ai.keyPresent;
+      aiChecked = true;
+    });
+  });
+
+  // Touch devices have no window chrome (min/max/close): the back arrow —
+  // in-app or the system gesture — saves to Drafts when dirty and closes.
+  const coarse =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(pointer: coarse)").matches;
+
+  async function backOut() {
+    if (dirty) await save();
+    if (!dirty) await close();
+    // A failed save keeps the editor open with the error shown.
+  }
+
+  // Standalone compose window on mobile: the OS back button/gesture exits
+  // through backOut (never a raw activity finish, which would orphan the
+  // draft). Inline editors answer to the main window's handler instead.
+  $effect(() => {
+    if (!chrome || !coarse) return;
+    (window as unknown as { __skimGoBack?: () => boolean }).__skimGoBack = () => {
+      void backOut();
+      return true;
+    };
+    return () => {
+      delete (window as unknown as { __skimGoBack?: () => boolean }).__skimGoBack;
+    };
   });
 
   /** Split the body into the part being written and the tail that must survive
@@ -526,7 +558,21 @@
   onpaste={onPaste}
 >
   {#if chrome}
-    <WindowControls {title} onclose={close} />
+    {#if coarse}
+      <div class="mobile-bar">
+        <button
+          class="back"
+          onclick={() => void backOut()}
+          aria-label={t("nav.back")}
+          title={t("nav.back")}
+        >
+          <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5L4.5 8l5.5 5.5" /></svg>
+        </button>
+        <span class="title">{title}</span>
+      </div>
+    {:else}
+      <WindowControls {title} onclose={close} />
+    {/if}
   {/if}
 
   {#if draft}
@@ -635,6 +681,14 @@
             <button class="ai-chip" onclick={() => adjust("formal")}>{t("ai.formal")}</button>
           </div>
         {/if}
+      </div>
+    {:else if aiChecked}
+      <!-- No AI key yet: one visible entry point that leads to Settings. -->
+      <div class="ai-bar">
+        <button type="button" class="ai-teaser" onclick={() => ui.openSettings()}>
+          <span class="spark">✦</span>
+          <span>{t("settings.ai")}</span>
+        </button>
       </div>
     {/if}
 
@@ -928,6 +982,22 @@
     display: flex;
     gap: 6px;
   }
+  /* No AI key yet: a quiet entry point into Settings. */
+  .ai-teaser {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: 1px solid var(--accent-dim);
+    border-radius: var(--radius-m);
+    padding: 10px 14px;
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 600;
+    width: 100%;
+  }
+  .ai-teaser:hover {
+    background: var(--accent-soft);
+  }
 
   .error {
     padding: 8px 20px;
@@ -941,6 +1011,50 @@
     gap: 10px;
     padding: 12px 20px;
     border-top: 1px solid var(--hairline);
+  }
+  /* Standalone window on touch devices: back arrow instead of window
+     chrome, clearing the status bar and the gesture bar. */
+  .mobile-bar {
+    display: none;
+  }
+  @media (pointer: coarse) {
+    .mobile-bar {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-left: env(safe-area-inset-left, 0px);
+      padding-right: env(safe-area-inset-right, 0px);
+      border-bottom: 1px solid var(--hairline);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .mobile-bar .back {
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      color: var(--text-dim);
+      flex-shrink: 0;
+    }
+    .mobile-bar .back:hover {
+      color: var(--text);
+    }
+    .mobile-bar .title {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 700;
+      font-size: 15px;
+      padding-right: 16px;
+    }
+    .bar {
+      padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+      padding-left: calc(20px + env(safe-area-inset-left, 0px));
+      padding-right: calc(20px + env(safe-area-inset-right, 0px));
+    }
   }
   .send {
     padding: 8px 22px;

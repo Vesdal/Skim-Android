@@ -21,6 +21,47 @@
   // rows from every account interleave.
   const badge = $derived(mail.unified ? mail.accountBadge(thread.accountId) : null);
 
+  // Long-press (touch) ticks the row, Gmail-style: no need to hit the tiny
+  // checkbox. A scroll cancels it; the tap that ends a long-press is swallowed
+  // so the thread doesn't open underneath the new selection.
+  let pressTimer: ReturnType<typeof setTimeout> | null = null;
+  let pressX = 0;
+  let pressY = 0;
+  let suppressClick = false;
+
+  function clearPress() {
+    if (pressTimer !== null) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+  }
+  function onPointerDown(e: PointerEvent) {
+    if (e.pointerType !== "touch") return;
+    suppressClick = false;
+    pressX = e.clientX;
+    pressY = e.clientY;
+    clearPress();
+    pressTimer = setTimeout(() => {
+      pressTimer = null;
+      suppressClick = true;
+      ontoggle?.(false);
+    }, 450);
+  }
+  function onPointerMove(e: PointerEvent) {
+    if (pressTimer === null) return;
+    if (Math.hypot(e.clientX - pressX, e.clientY - pressY) > 10) clearPress();
+  }
+  function onPointerUp() {
+    clearPress();
+  }
+  function onRowClick() {
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
+    onselect?.(thread.id);
+  }
+
   function formatDate(unix: number): string {
     const locale = getLocale();
     const d = new Date(unix * 1000);
@@ -50,7 +91,14 @@
       <path d="M1.5 5.2l2.4 2.4L8.5 2.6" />
     </svg>
   </button>
-  <button class="row" onclick={() => onselect?.(thread.id)}>
+  <button
+    class="row"
+    onclick={onRowClick}
+    onpointerdown={onPointerDown}
+    onpointermove={onPointerMove}
+    onpointerup={onPointerUp}
+    onpointercancel={onPointerUp}
+  >
     <div class="line1">
       <span class="from">
         {#if !thread.isRead}<span class="unread-dot"></span>{/if}
@@ -134,6 +182,22 @@
     .row,
     .check {
       transition: none;
+    }
+  }
+
+  /* Touch: the checkbox is gone — long-press enters selection, taps tick.
+     The date reclaims the reserved slot. */
+  @media (pointer: coarse) {
+    .check {
+      display: none;
+    }
+    .line1 {
+      padding-right: 0;
+    }
+    /* Hover sticks after a tap on touch screens, and the checked tint is the
+       same wash — without this a just-unticked row keeps looking selected. */
+    .row-wrap:not(.selected):not(.checked):hover .row {
+      background: transparent;
     }
   }
 
